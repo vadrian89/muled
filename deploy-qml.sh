@@ -8,6 +8,7 @@ if [ ! "$#" -eq 3 ]; then
   echo "Example: ./deploy-qml.sh /destination/directory /qml/source/code /qt/installation/location"
   exit 1
 fi
+STATUS=0
 if [ -z "$DATE" ]; then
   DATE=`date +"%Y-%m-%d"_%H:%M:%S`
 fi
@@ -22,21 +23,30 @@ QML_IMPORT_PATH=`echo "$3/qml" | sed -E 's/\/\//\//g'`
 QML_IMPORT_SCANNER=`echo "$3/bin/qmlimportscanner" | sed -E 's/\/\//\//g'`
 QML_IMPORT_SCANNER=`command -v "$QML_IMPORT_SCANNER"`
 if [ ! -d "$WORKING_DIR" ]; then
-  echo "$WORKING_DIR not found, exiting!"
-  exit 1
+  echo "$WORKING_DIR not found!"
+  STATUS=1
 fi
 #Directory containing QML source code used in application
 if [ ! -d "$QML_ROOT_PATH" ]; then
-  echo "$QML_ROOT_PATH not found, exiting!" | tee -a "$LOG_FILE"
-  exit 1
+  echo "$QML_ROOT_PATH not found!" | tee -a "$LOG_FILE"
+  STATUS=1
 fi
 #Directory containing QML dependencies to be deployed
 if [ ! -d "$QML_IMPORT_PATH" ]; then
-  echo "$QML_IMPORT_PATH not found, exiting!" | tee -a "$LOG_FILE"
-  exit 1
+  echo "$QML_IMPORT_PATH not found!" | tee -a "$LOG_FILE"
+  STATUS=1
 fi
 if [ -z "$QML_IMPORT_SCANNER" ]; then
-  echo "qmlimportscanner not found, exiting!" | tee -a "$LOG_FILE"
+  echo "qmlimportscanner not found!" | tee -a "$LOG_FILE"
+  STATUS=1
+fi
+JQ=`command -v jq`
+if [ -z "$JQ" ]; then
+  echo "jq not found, install it and try again!" | tee -a "$LOG_FILE"
+  STATUS=1
+fi
+if [ "$STATUS" -eq 1 ]; then
+  echo "Check the log for issues, solve them and try again!"
   exit 1
 fi
 cat <<EOF |
@@ -79,3 +89,4 @@ while read LINE; do
     cp -R "$IMPORT_PLUGIN_PATH"/* "$IMPORT_DEST_DIR/" 2>> "$LOG_FILE"
   fi
 done
+exit 0

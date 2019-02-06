@@ -9,80 +9,95 @@ if [ "$#" -lt 3 ]; then
   echo "Example: ./deploy-libraries.sh /destination/directory /path/to/executable false"
   exit 1
 fi
+SATUS="0"
 if [ -z "$DATE" ]; then
   DATE=`date +"%Y-%m-%d"_%H:%M:%S`
 fi
 if [ -z "$LOG_FILE" ]; then
-  LOG_FILE="$PWD/log_deploy_libraries_$DATE.log"
+  LOG_FILE="${PWD}/log_deploy_libraries_${DATE}.log"
   touch "$LOG_FILE"
 fi
-echo "Deploying libraries." | tee -a "$LOG_FILE"
+echo "Deploying libraries." 2>&1 | tee -a "$LOG_FILE"
 LIBRARIES="$1"
 EXECUTABLE="$2"
 NON_QT_LIBRARIES=`echo "$3" | sed -nE 's/y|yes|true/true/I p'`
 QT_SOURCE_LIBRARIES="$4"
 if [ ! -d "$LIBRARIES" ]; then
-  echo "$LIBRARIES not found, exiting!" | tee -a "$LOG_FILE"
-  exit 1
+  echo "$LIBRARIES not found!" 2>&1 | tee -a "$LOG_FILE"
+  STATUS="1"
 fi
 if [ ! -f "$EXECUTABLE" ]; then
-  echo "$EXECUTABLE not found, exiting!" | tee -a "$LOG_FILE"
-  exit 1
+  echo "$EXECUTABLE not found!" 2>&1 | tee -a "$LOG_FILE"
+  STATUS="1"
 fi
 if [ -z "$NON_QT_LIBRARIES" ]; then
   NON_QT_LIBRARIES=`echo "$3" | sed -nE 's/n|no|false/false/I p'`
 fi
 if [ -z "$NON_QT_LIBRARIES" ]; then
-  echo "Deploy non Qt libraries is not a valid value.(Y/N)" | tee -a "$LOG_FILE"
-  echo "$3 was provided" | tee -a "$LOG_FILE"
-  exit 1
+  echo "Deploy non Qt libraries is not a valid value.(Y/N)" 2>&1 | tee -a "$LOG_FILE"
+  echo "$3 was provided" 2>&1 | tee -a "$LOG_FILE"
+  STATUS="1"
 fi
 LDD=`command -v ldd`
 if [ -z "$LDD" ]; then
-  echo "ldd not found, exiting script!" | tee -a "$LOG_FILE"
+  echo "ldd not found!" 2>&1 | tee -a "$LOG_FILE"
+  STATUS="1"
+fi
+if [ "$STATUS" == "1" ]; then
+  echo "Check the log for issues, solve them and try again!"
   exit 1
 fi
-echo "Libraries destination: $LIBRARIES" | tee -a "$LOG_FILE"
+echo "Libraries destination: $LIBRARIES" 2>&1 | tee -a "$LOG_FILE"
 cat << EOF |
 `ldd $EXECUTABLE`
 EOF
 
 while read LINE; do
   DEPENDENCY="$LINE"
+  # Check if we only deploy Qt libraries
   if [ "$NON_QT_LIBRARIES" == "false" ]; then
     DEPENDENCY=`echo "$LINE" | sed -En '/Qt/p'`
   fi
-  if [ ! -z "$DEPENDENCY" ]; then
-    DEPENDENCY=`echo "$DEPENDENCY" | sed -E 's/[a-zA-Z].*\ =>\ //' | sed -En 's/\ \(.*\)//p'`
-    echo "DEPENDENCY: $DEPENDENCY" | tee -a "$LOG_FILE"
-    DEPENDENCY_NAME=`echo "$DEPENDENCY" | sed -En 's@(\/.*)(lib.*\.so.[0-9]*)(.*)@\2@p'`
-    echo "DEPENDENCY_NAME: $DEPENDENCY_NAME" | tee -a "$LOG_FILE"
-    if [ -f "$LIBRARIES/$DEPENDENCY_NAME" ]; then
-      echo "File $LIBRARIES/$DEPENDENCY_NAME exists, skipping!" | tee -a "$LOG_FILE"
-      echo "If you want to delete it, copy and paste the following command in terminal: rm $LIBRARIES/$DEPENDENCY_NAME" | tee -a "$LOG_FILE"
-      continue
+  if [ -n "$DEPENDENCY" ]; then
+    DEPENDENCY_NAME=`echo "$DEPENDENCY" | sed -En 's/\ =>\ .*//p'`
+    DEPENDENCY_NAME=`trim "$DEPENDENCY_NAME"`
+    # If we find the library in the custom qt installation we continue with that
+    if [ -f "${QT_SOURCE_LIBRARIES}/${DEPENDENCY_NAME}" ]; then
+      DEPENDENCY="${QT_SOURCE_LIBRARIES}/${DEPENDENCY_NAME}"
+      echo "$DEPENDENCY found in Qt installation, deploying from here." 2>&1 | tee -a "$LOG_FILE"
+      # Otherwise we continue with the one from the system
+    else
+      DEPENDENCY=`echo "$DEPENDENCY" | sed -En 's/.*\ =>\ //p' | sed -En 's/\ .*//p'`
+      if [ -n "$DEPENDENCY" ]; then
+        echo "$DEPENDENCY found in system, deploying from here." 2>&1 | tee -a "$LOG_FILE"
+      else
+        echo "$LINE not found anywhere." 2>&1 | tee -a "$LOG_FILE"
+      fi
     fi
-    IS_QT_LIB=`echo "$DEPENDENCY" | sed -En '/Qt/I p'`
-    if [ ! -z "$IS_QT_LIB" ]; then
-      echo "Is Qt library." | tee -a "$LOG_FILE"
-    fi
-    if [ ! -z "$QT_SOURCE_LIBRARIES" -a ! -z "$IS_QT_LIB" ]; then
-      echo "QT_SOURCE_LIBRARIES: $QT_SOURCE_LIBRARIES" | tee -a "$LOG_FILE"
-      DEPENDENCY=`echo "$DEPENDENCY" | sed -En 's@(\/.*)(lib.*\.so.[0-9]*)(.*)@'"$QT_SOURCE_LIBRARIES/"'\2@p'`
-      echo "New DEPENDENCY: $DEPENDENCY" | tee -a "$LOG_FILE"
-    fi
-    echo "Copying $DEPENDENCY" | tee -a "$LOG_FILE"
-    echo "To $LIBRARIES" | tee -a "$LOG_FILE"
-    cp "$DEPENDENCY" "$LIBRARIES" 2>&1 | tee -a "$LOG_FILE"
-    if [ "$?" != "0" ]; then
-      echo "Exit code of cp is $?, check $LOG_FILE for error message!" | tee -a "$LOG_FILE"
+    # We ensure again that a dependency was found in the system
+    if [ -n "$DEPENDENCY" ]; then
+      # We make sure to not override any existing library and let developer know there is an existing library deployed
+      if [ ! -f "${LIBRARIES}/${DEPENDENCY_NAME}" ]; then
+        echo "Copying $DEPENDENCY" 2>&1 | tee -a "$LOG_FILE"
+        echo "To $LIBRARIES" 2>&1 | tee -a "$LOG_FILE"
+        cp "$DEPENDENCY" "$LIBRARIES" 2>&1 | tee -a "$LOG_FILE"
+        if [ "$?" -ne 0 ]; then
+          echo "Exit code of cp is $?, check $LOG_FILE for error message!" 2>&1 | tee -a "$LOG_FILE"
+        fi
+      else
+        echo "File $LIBRARIES/$DEPENDENCY_NAME exists, skipping!" 2>&1 | tee -a "$LOG_FILE"
+        echo "If you want to delete it, copy and paste the following command in terminal: rm $LIBRARIES/$DEPENDENCY_NAME" 2>&1 | tee -a "$LOG_FILE"
+      fi
+    else
+      echo "Warning, $LINE not deployed." 2>&1 | tee -a "$LOG_FILE"
     fi
   fi
 done
 
-echo "Variables used:" | tee -a "$LOG_FILE"
+echo "Variables used:" 2>&1 | tee -a "$LOG_FILE"
 echo "LOG_FILE: $LOG_FILE"
-echo "EXECUTABLE: $EXECUTABLE" | tee -a "$LOG_FILE"
-echo "LIBRARIES: $LIBRARIES" | tee -a "$LOG_FILE"
-echo "NON_QT_LIBRARIES: $NON_QT_LIBRARIES" | tee -a "$LOG_FILE"
-echo "LDD: $LDD" | tee -a "$LOG_FILE"
+echo "EXECUTABLE: $EXECUTABLE" 2>&1 | tee -a "$LOG_FILE"
+echo "LIBRARIES: $LIBRARIES" 2>&1 | tee -a "$LOG_FILE"
+echo "NON_QT_LIBRARIES: $NON_QT_LIBRARIES" 2>&1 | tee -a "$LOG_FILE"
+echo "LDD: $LDD" 2>&1 | tee -a "$LOG_FILE"
+exit 0
